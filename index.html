@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Visor Geográfico del ODS</title>
+
+  <!-- OpenLayers + Turf -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@latest/ol.css" />
+  <script src="https://cdn.jsdelivr.net/npm/ol@latest/dist/ol.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+
+  <!-- Fuente para títulos -->
+  <style>
+    @font-face{
+      font-family: "Sergio Trendy";
+      src: url("fonts/SergioTrendy.ttf") format("truetype");
+      font-weight: normal; font-style: normal; font-display: swap;
+    }
+  </style>
+
+  <style>
+    :root { --panel:#111827; --muted:#cfe8ef; --accent:#10b981; --text:#e5e7eb; --brand:#2bb9c7; --brandText:#ffffff; }
+    html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,'Helvetica Neue',Arial}
+    #app{display:grid;grid-template-columns:360px 1fr;height:100%;}
+    header{display:flex;align-items:center;gap:12px;background:var(--brand);color:var(--brandText);border-bottom:1px solid #17a2b3;padding:10px 12px}
+    header img{height:44px;object-fit:contain}
+    aside{background:var(--panel);color:var(--text);padding:16px 14px;overflow:auto}
+    .muted{color:var(--muted);font-size:12px}
+    .section{margin:10px 0 16px;padding:12px;border:1px solid #1f2937;border-radius:12px}
+    .row{display:flex;gap:8px;align-items:center;margin:6px 0}
+    .btn{background:var(--accent);color:#052e2b;border:0;padding:8px 10px;border-radius:10px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+    .btn.secondary{background:#1f2937;color:#e5e7eb}
+    .btn:disabled{opacity:.6;cursor:not-allowed}
+    #map{height:100%;width:100%}
+    .legendPreview{max-width:100%;background:white;border:1px solid #e5e7eb;border-radius:8px;padding:6px}
+    /* Herramientas */
+    #toolbar{position:absolute; right:12px; top:12px; z-index:1000; display:flex; flex-direction:column; gap:8px}
+    #toolbar .btn{width:40px;height:40px;padding:0;font-size:18px;border-radius:8px}
+    #toolbar .btn.secondary{background:#1f2937;color:#e5e7eb}
+    /* Tooltip medición */
+    .tooltip{
+      position: absolute; background: rgba(17,24,39,.9); color: #fff;
+      padding: 4px 6px; border-radius: 6px; white-space: nowrap; font-size: 12px;
+      border: 1px solid rgba(255,255,255,.15);
+      transform: translate(-50%,-120%); pointer-events: none;
+    }
+/* Encabezados de grupo */
+.group-card { border:1px solid #1f2937; border-radius:12px; overflow:hidden; margin-bottom:10px; }
+.group-card summary {
+  list-style:none; cursor:pointer; user-select:none;
+  display:flex; align-items:center; gap:10px;
+  padding:12px 14px; background:#0f172a; color:#e5e7eb; font-weight:600;
+  border-bottom:1px solid #1f2937;
+}
+.group-card[open] summary { background:#111827; }
+.group-card .group-body { padding:10px 12px; background:#0b1220; }
+.group-icon { width:18px; height:18px; display:inline-block; }
+summary::-webkit-details-marker { display:none; }
+
+    /* Leyenda multi-capa */
+    .legend-block{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:8px}
+    .legend-title{font-weight:700;margin:4px 0 6px;color:#111827}
+    .legend-img{max-width:100%}
+    /* Preview export */
+    #previewCanvas{width:100%;max-width:100%;border:1px solid #1f2937;border-radius:8px;background:#fff}
+  </style>
+</head>
+<body>
+<div id="app">
+  <aside>
+    <header>
+      <img id="logoLeft" src="img/logo_ods.png" alt="Logo izq"/>
+      <div style="flex:1">
+        <div style="font-weight:800;color:var(--brandText)">Visor Geográfico del ODS</div>
+       
+      </div>
+      <img id="logoRight" src="img/logo_sedesol.png" alt="Logo der"/>
+    </header>
+
+    <div class="section">
+      <strong>Mapa base</strong>
+      <div class="row">
+        <select id="basemapSel" style="flex:1">
+          <option value="osm">OSM</option>
+          <option value="esri">ESRI Satélite</option>
+          <option value="stamen">Stamen Toner</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="section">
+      <strong>Capas</strong>
+      <div class="muted">Activa/ordena la visibilidad y ajusta opacidad.</div>
+      <div id="groupsUI"></div>
+    </div>
+
+    <!-- Filtros por atributos (auto valores) -->
+    <div class="section">
+      <strong>Filtros por atributos</strong>
+      <div class="muted small">Elige capa y atributo; el visor listará automáticamente los valores.</div>
+
+      <div class="row"><select id="fltLayer" style="flex:1"><option value="">— Elige una capa —</option></select></div>
+
+      <div class="row" style="gap:6px">
+        <select id="fltAttr" style="flex:1"><option value="">— Atributo —</option></select>
+        <select id="fltOp" style="width:150px">
+          <option value="=">=</option><option value="LIKE">contiene</option>
+          <option value="<>">&ne;</option><option value=">">&gt;</option>
+          <option value=">=">&ge;</option><option value="<">&lt;</option>
+          <option value="<=">&le;</option><option value="IS NULL">es nulo</option>
+          <option value="IS NOT NULL">no es nulo</option>
+        </select>
+      </div>
+
+      <!-- valor: selector (texto) o input (numérico/libre) -->
+      <div class="row" id="fltValueRow">
+        <select id="fltValueSel" style="flex:1; display:none"></select>
+        <input id="fltValue" type="text" placeholder="Valor…" style="flex:1; display:none"/>
+      </div>
+
+      <div class="row" style="gap:6px;flex-wrap:wrap">
+        <button class="btn" id="fltApply">Aplicar filtro</button>
+        <button class="btn secondary" id="fltClear">Quitar filtro</button>
+      </div>
+
+      <div class="muted small" id="fltInfo"></div>
+    </div>
+
+    <!-- Leyenda multi-capa -->
+    <div class="section">
+      <strong>Leyenda</strong>
+      <div id="legendPanel" class="legend-block"></div>
+    </div>
+
+    <!-- Exportar -->
+    <div class="section">
+      <strong>Exportar mapa (JPG)</strong>
+      <div class="row"><input id="titleOverride" type="text" placeholder="Título (si lo dejas vacío usa la capa activa)" style="width:100%"></div>
+      <div class="row" style="gap:8px">
+        <button class="btn" id="makePreview">Generar vista previa</button>
+        <a id="dlJPG" class="btn secondary" download="mapa_ods.jpg">Descargar JPG</a>
+      </div>
+      <canvas id="previewCanvas" height="0"></canvas>
+    </div>
+  </aside>
+
+  <!-- Mapa -->
+  <div id="map">
+    <div id="toolbar">
+      <button class="btn" id="zoomIn" title="Acercar">+</button>
+      <button class="btn" id="zoomOut" title="Alejar">−</button>
+      <button class="btn" id="fullExtent" title="Vista general">⤢</button>
+      <button class="btn" id="identify" title="Identificar">ⓘ</button>
+      <button class="btn" id="measureLen" title="Medir distancia">📏</button>
+      <button class="btn" id="measureArea" title="Medir área">▧</button>
+      <button class="btn secondary" id="clearDraw" title="Limpiar">🧹</button>
+    </div>
+    <div id="infoPopup" style="position:absolute;right:8px;top:8px;max-width:380px;background:white;border:1px solid #e5e7eb;padding:8px;border-radius:8px;display:none;z-index:1000"></div>
+  </div>
+</div>
+
+<script>
+/* ==== BASE ==== */
+const BASE_URL = 'http://localhost:8081/geoserver';
+const wmsUrl = ()=> `${BASE_URL}/wms`;
+const wfsUrl = ()=> `${BASE_URL}/wfs`;
+const CREDITS_TEXT = 'Fuente: GeoServer ODS / OSM · Elaboración: Observatorio de Desarrollo Social';
+
+/* ==== CATÁLOGO ==== */
+/* ==== CATÁLOGO (grupos con icono) ==== */
+const catalog = [
+  {
+    group: "Cartografía base",
+    icon: "base",
+    items: [
+      { id:"ODS:DEPARTAMENTOS_HN_GEO", title:"Departamentos (HN)", type:"WMS" },
+      { id:"ODS:Caserios_HN",         title:"Caseríos (HN)",      type:"WMS" }
+    ]
+  },
+  { group: "SIRBHO", icon: "sirbho", items: [
+      // aquí publicarás luego las capas SIRBHO (WMS)
+  ]},
+  { group: "ROPI",   icon: "ropi",   items: [
+      // aquí publicarás luego las capas ROPI (WMS)
+  ]},
+  { group: "SIAMIR", icon: "siamir", items: [
+      // aquí publicarás luego las capas SIAMIR (WMS)
+  ]}
+];
+
+/* ==== ESTADO ==== */
+const mapLayers = new Map();
+let identifyActive = false;
+let measureDraw = null;
+let measureLayer = null;
+let measureTooltip = null;
+let measureTooltipEl = null;
+
+/* ==== MAPA y BASEMAPS ==== */
+const osm = new ol.layer.Tile({ source: new ol.source.OSM({ crossOrigin:'anonymous' }), visible:true });
+const esri = new ol.layer.Tile({
+  visible:false,
+  source:new ol.source.XYZ({ url:'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', crossOrigin:'anonymous' })
+});
+const stamen = new ol.layer.Tile({
+  visible:false,
+  source:new ol.source.XYZ({ url:'https://stamen-tiles.a.ssl.fastly.net/toner/{z}/{x}/{y}.png', crossOrigin:'anonymous' })
+});
+
+const map = new ol.Map({
+  target: 'map',
+  layers: [osm, esri, stamen],
+  view: new ol.View({ center: ol.proj.fromLonLat([-87.2,14.5]), zoom: 7 })
+});
+map.addControl(new ol.control.ScaleLine());
+map.addControl(new ol.control.MousePosition({
+  coordinateFormat: ol.coordinate.createStringXY(5), projection:'EPSG:4326', className:'ol-mouse-position'
+}));
+
+/* ==== CAPAS ==== */
+function addWmsLayer(layerId, title){
+  const lyr = new ol.layer.Image({
+    title, visible: true, opacity: 1, zIndex: 10,
+    source: new ol.source.ImageWMS({
+      url: wmsUrl(),
+      params:{ LAYERS: layerId, TILED:true },
+      serverType:'geoserver', ratio:1, crossOrigin:'anonymous'
+    })
+  });
+  map.addLayer(lyr);
+  return lyr;
+}
+
+function addCatalogLayer(item){ return addWmsLayer(item.id,item.title); }
+
+/* Leyenda multi-capa (títulos + imagen) */
+function visibleWmsItems(){
+  return catalog.flatMap(g=>g.items).filter(c=>{
+    const lyr = mapLayers.get(c.id);
+    return lyr && lyr.getVisible();
+  });
+}
+function legendImgUrl(layerId){
+  return `${wmsUrl()}?service=WMS&request=GetLegendGraphic&format=image/png&layer=${encodeURIComponent(layerId)}`;
+}
+function buildLegendPanel(){
+  const cont = document.getElementById('legendPanel');
+  cont.innerHTML = '';
+  const vis = visibleWmsItems();
+  if(!vis.length){ cont.innerHTML = '<div class="muted small">No hay capas visibles.</div>'; return; }
+  vis.forEach(c=>{
+    const block = document.createElement('div'); block.style.marginBottom='8px';
+    const t = document.createElement('div'); t.className='legend-title'; t.textContent = c.title; block.appendChild(t);
+    const img = document.createElement('img'); img.className='legend-img'; img.alt = c.title; img.src = legendImgUrl(c.id); block.appendChild(img);
+    cont.appendChild(block);
+  });
+}
+
+/* Extent capa */
+async function zoomToLayer(layerId){
+  try{
+    const url = `${wmsUrl()}?service=WMS&version=1.3.0&request=GetCapabilities`;
+    const text = await (await fetch(url)).text();
+    const xml = new DOMParser().parseFromString(text,'text/xml');
+    const nodes = Array.from(xml.getElementsByTagName('Layer')).filter(n => n.getElementsByTagName('Name')[0]);
+    const node = nodes.find(n => n.getElementsByTagName('Name')[0].textContent === layerId);
+    if(!node) return;
+    const ex = node.getElementsByTagName('EX_GeographicBoundingBox')[0] || node.getElementsByTagName('LatLonBoundingBox')[0];
+    if(!ex) return;
+    let w,s,e,n;
+    if(ex.tagName === 'EX_GeographicBoundingBox'){
+      w = parseFloat(ex.getElementsByTagName('westBoundLongitude')[0].textContent);
+      e = parseFloat(ex.getElementsByTagName('eastBoundLongitude')[0].textContent);
+      s = parseFloat(ex.getElementsByTagName('southBoundLatitude')[0].textContent);
+      n = parseFloat(ex.getElementsByTagName('northBoundLatitude')[0].textContent);
+    }else{
+      w = parseFloat(ex.getAttribute('minx')); s = parseFloat(ex.getAttribute('miny'));
+      e = parseFloat(ex.getAttribute('maxx')); n = parseFloat(ex.getAttribute('maxy'));
+    }
+    const extent3857 = ol.proj.transformExtent([w,s,e,n],'EPSG:4326','EPSG:3857');
+    map.getView().fit(extent3857,{padding:[20,20,20,20], duration:400});
+  }catch(e){ console.warn('zoomToLayer error',e); }
+}
+function iconSvg(kind="base"){
+  const common = 'width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2bb9c7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+  switch(kind){
+    case "sirbho": // pin/mapa
+      return `<svg ${common}><path d="M12 21s7-6.1 7-11a7 7 0 1 0-14 0c0 4.9 7 11 7 11Z"/><circle cx="12" cy="10" r="3"/></svg>`;
+    case "ropi": // camino
+      return `<svg ${common}><path d="M4 20l7-16 2 5 7-3M4 20h6m4 0h6"/></svg>`;
+    case "siamir": // cruz salud
+      return `<svg ${common}><path d="M10 4h4v6h6v4h-6v6h-4v-6H4v-4h6V4Z"/></svg>`;
+    default: // base: capas
+      return `<svg ${common}><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>`;
+  }
+}
+
+/* ==== UI CAPAS ==== */
+function buildGroupsUI(){
+  const container = document.getElementById('groupsUI'); container.innerHTML='';
+  catalog.forEach(group=>{
+    const box = document.createElement('details'); box.open = true;
+    const sum = document.createElement('summary'); sum.textContent = group.group; box.appendChild(sum);
+
+    group.items.forEach(c=>{
+      if(!mapLayers.has(c.id)){ const lyr = addCatalogLayer(c); mapLayers.set(c.id,lyr); }
+      const lyr = mapLayers.get(c.id);
+      const row = document.createElement('div'); row.className='row';
+      const chk = document.createElement('input'); chk.type='checkbox'; chk.checked=lyr.getVisible();
+      chk.onchange=()=>{ lyr.setVisible(chk.checked); buildLegendPanel(); if(chk.checked) zoomToLayer(c.id); };
+      const lbl = document.createElement('label'); lbl.style.flex='1'; lbl.appendChild(chk); lbl.appendChild(document.createTextNode(' '+c.title));
+      const op = document.createElement('input'); op.type='range'; op.min=0; op.max=1; op.step=0.05; op.value=lyr.getOpacity?.() ?? 1;
+      op.oninput=()=>{ if(lyr.setOpacity) lyr.setOpacity(parseFloat(op.value)); };
+      row.appendChild(lbl); row.appendChild(op); box.appendChild(row);
+    });
+
+    container.appendChild(box);
+  });
+  buildLegendPanel();
+}
+
+/* ==== HERRAMIENTAS ==== */
+function clearInteractions(){
+  if(measureDraw){ map.removeInteraction(measureDraw); measureDraw=null; }
+  if(measureTooltip){ map.removeOverlay(measureTooltip); measureTooltip=null; }
+  if(measureTooltipEl){ measureTooltipEl.remove(); measureTooltipEl=null; }
+  document.getElementById('infoPopup').style.display='none';
+  identifyActive=false;
+}
+document.getElementById('zoomIn').onclick = ()=> map.getView().animate({zoom: map.getView().getZoom()+1, duration:200});
+document.getElementById('zoomOut').onclick = ()=> map.getView().animate({zoom: map.getView().getZoom()-1, duration:200});
+document.getElementById('fullExtent').onclick = ()=> map.getView().animate({center: ol.proj.fromLonLat([-87.2,14.5]), zoom:7});
+document.getElementById('identify').onclick = ()=>{ clearInteractions(); identifyActive=true; };
+
+map.on('singleclick', async evt=>{
+  if(!identifyActive) return;
+  const firstVisible = visibleWmsItems()[0];
+  if(!firstVisible) return;
+  const lyr = mapLayers.get(firstVisible.id);
+  const url = lyr.getSource().getFeatureInfoUrl(evt.coordinate, map.getView().getResolution(), map.getView().getProjection(), { INFO_FORMAT:'application/json' });
+  if(!url) return;
+  const r = await fetch(url); if(!r.ok) return;
+  const json = await r.json(); const props = json.features?.[0]?.properties || {};
+  const html = Object.entries(props).map(([k,v])=>`<div><strong>${k}</strong>: ${v}</div>`).join('') || 'Sin atributos';
+  const pop = document.getElementById('infoPopup'); pop.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><strong>Identificar</strong><button class="btn" onclick="document.getElementById('infoPopup').style.display='none'">Cerrar</button></div>` + html; pop.style.display='block';
+});
+
+/* Medición */
+function ensureMeasureLayer(){
+  if(measureLayer) return measureLayer;
+  measureLayer = new ol.layer.Vector({
+    source: new ol.source.Vector(),
+    style: new ol.style.Style({
+      stroke: new ol.style.Stroke({ color:'#10b981', width:2 }),
+      fill:   new ol.style.Fill({ color:'rgba(16,185,129,0.2)' }),
+      image:  new ol.style.Circle({ radius:4, fill:new ol.style.Fill({color:'#10b981'}), stroke:new ol.style.Stroke({color:'#065f46', width:1}) })
+    }),
+    zIndex: 1000
+  });
+  map.addLayer(measureLayer);
+  return measureLayer;
+}
+function createMeasureTooltip(){
+  if(measureTooltipEl){ measureTooltipEl.remove(); }
+  measureTooltipEl = document.createElement('div');
+  measureTooltipEl.className = 'tooltip';
+  measureTooltip = new ol.Overlay({ element: measureTooltipEl, offset:[0,-10], positioning:'bottom-center' });
+  map.addOverlay(measureTooltip);
+}
+function formatLength(geom){
+  const line = geom.clone().transform(map.getView().getProjection(),'EPSG:4326');
+  const length = ol.sphere.getLength(line, {projection:'EPSG:4326'});
+  return (length>1000) ? (length/1000).toFixed(2)+' km' : length.toFixed(1)+' m';
+}
+function formatArea(geom){
+  const poly = geom.clone().transform(map.getView().getProjection(),'EPSG:4326');
+  const area = ol.sphere.getArea(poly, {projection:'EPSG:4326'});
+  return (area>1e6) ? (area/1e6).toFixed(2)+' km²' : area.toFixed(1)+' m²';
+}
+function startMeasure(drawType){
+  clearInteractions();
+  ensureMeasureLayer();
+  createMeasureTooltip();
+  measureDraw = new ol.interaction.Draw({ source: measureLayer.getSource(), type: drawType });
+  map.addInteraction(measureDraw);
+  let sketch = null;
+  measureDraw.on('drawstart', (e)=>{
+    sketch = e.feature;
+    measureTooltipEl.innerHTML = drawType==='LineString' ? '0 m' : '0 m²';
+    measureTooltip.setPosition(e.coordinate);
+    sketch.getGeometry().on('change', (evt)=>{
+      const geom = evt.target;
+      const output = drawType==='LineString' ? formatLength(geom) : formatArea(geom);
+      measureTooltipEl.innerHTML = output;
+      const coord = drawType==='LineString' ? geom.getLastCoordinate() : geom.getInteriorPoint().getCoordinates();
+      measureTooltip.setPosition(coord);
+    });
+  });
+  measureDraw.on('drawend', ()=>{
+    measureTooltip = null; measureTooltipEl = null; createMeasureTooltip();
+  });
+}
+document.getElementById('measureLen').onclick  = ()=> startMeasure('LineString');
+document.getElementById('measureArea').onclick = ()=> startMeasure('Polygon');
+document.getElementById('clearDraw').onclick   = ()=>{ clearInteractions(); if(measureLayer){ measureLayer.getSource().clear(); } };
+
+/* Basemaps */
+document.getElementById('basemapSel').onchange = ()=>{
+  const v = document.getElementById('basemapSel').value;
+  osm.setVisible(v==='osm'); esri.setVisible(v==='esri'); stamen.setVisible(v==='stamen');
+};
+
+/* ====== Filtros por atributos (auto valores) ====== */
+const fltLayerSel = document.getElementById('fltLayer');
+const fltAttrSel  = document.getElementById('fltAttr');
+const fltOpSel    = document.getElementById('fltOp');
+const fltValueInp = document.getElementById('fltValue');
+const fltValueSel = document.getElementById('fltValueSel');
+const fltInfo     = document.getElementById('fltInfo');
+const fltApplyBtn = document.getElementById('fltApply');
+const fltClearBtn = document.getElementById('fltClear');
+
+function initFilterLayers(){
+  const all = catalog.flatMap(g => g.items);
+  fltLayerSel.innerHTML = '<option value="">— Elige una capa —</option>' +
+    all.map(c => `<option value="${c.id}" data-type="${c.type}">${c.title}</option>`).join('');
+}
+function isTextType(xsd){ return (xsd||'').toLowerCase().includes('string'); }
+
+async function describeFeatureType(typename){
+  const url = new URL(wfsUrl());
+  url.search = new URLSearchParams({ service:'WFS', request:'DescribeFeatureType', version:'2.0.0', typename }).toString();
+  const res = await fetch(url);
+  if(!res.ok){ throw new Error('DescribeFeatureType error'); }
+  const text = await res.text();
+  const xml = new DOMParser().parseFromString(text, 'text/xml');
+  const seq = xml.querySelector('xsd\\:sequence, sequence'); if(!seq){ return []; }
+  const elems = Array.from(seq.querySelectorAll('xsd\\:element, element'));
+  return elems.map(e => ({ name: e.getAttribute('name'), type: (e.getAttribute('type') || '').toLowerCase() }))
+              .filter(f => f.name && f.name.toLowerCase()!=='geom' && !f.type.includes('gml'));
+}
+
+function opsForType(xsd){
+  return isTextType(xsd)
+    ? ['=','LIKE','<>','IS NULL','IS NOT NULL']
+    : ['=','<>','>','>=','<','<=','IS NULL','IS NOT NULL'];
+}
+
+async function fetchDistinctValues(typename, attr, limit=2000){
+  const url = new URL(wfsUrl());
+  url.search = new URLSearchParams({
+    service:'WFS', version:'2.0.0', request:'GetPropertyValue',
+    typename, valueReference: attr, count: String(limit)
+  }).toString();
+  const res = await fetch(url);
+  if(!res.ok) throw new Error('GetPropertyValue error');
+  const text = await res.text();
+  try{
+    const xml = new DOMParser().parseFromString(text, 'text/xml');
+    const elems = Array.from(xml.getElementsByTagName(attr));
+    const vals = elems.map(e => (e.textContent ?? '').trim()).filter(v => v !== '');
+    const fallback = !vals.length ? Array.from(xml.getElementsByTagName('*')).map(n=>n.textContent?.trim()||'') : [];
+    const set = new Set((vals.length?vals:fallback).filter(v=>v!=='' && v!=='null'));
+    return Array.from(set).sort((a,b)=> a.localeCompare(b, 'es', {numeric:true, sensitivity:'base'}));
+  }catch{
+    try{
+      const json = JSON.parse(text);
+      const list = Array.isArray(json) ? json : [];
+      const set = new Set(list.map(v => (v??'').toString().trim()).filter(v=>v!==''));
+      return Array.from(set).sort((a,b)=> a.localeCompare(b, 'es', {numeric:true, sensitivity:'base'}));
+    }catch{ return []; }
+  }
+}
+
+async function updateValueUI(){
+  const layerId = fltLayerSel.value;
+  const opt = fltAttrSel.selectedOptions[0];
+  const xsd = opt?.dataset?.xsd || '';
+
+  fltValueSel.style.display = 'none';
+  fltValueInp.style.display = 'none';
+  fltValueSel.innerHTML = ''; fltValueInp.value = ''; fltInfo.textContent = '';
+
+  if(!layerId || !opt) return;
+
+  if(isTextType(xsd)){
+    fltInfo.textContent = 'Cargando valores distintos…';
+    try{
+      const values = await fetchDistinctValues(layerId, opt.value);
+      if(values.length){
+        fltValueSel.innerHTML = '<option value="">— Selecciona un valor —</option>' +
+                                values.map(v => `<option>${v}</option>`).join('');
+        fltValueSel.style.display = 'block';
+        fltInfo.textContent = `Se listaron ${values.length} valores.`;
+      }else{
+        fltValueInp.placeholder = 'Valor…';
+        fltValueInp.style.display = 'block';
+        fltInfo.textContent = 'No se pudieron listar valores; escribe el valor.';
+      }
+    }catch(e){
+      fltValueInp.placeholder = 'Valor…';
+      fltValueInp.style.display = 'block';
+      fltInfo.textContent = 'No se pudieron listar valores; escribe el valor.';
+    }
+  }else{
+    fltValueInp.placeholder = 'Valor (número / fecha)…';
+    fltValueInp.style.display = 'block';
+    try{
+      const sample = await fetchDistinctValues(layerId, opt.value, 200);
+      if(sample.length){
+        const min = sample.slice().sort((a,b)=>Number(a)-Number(b))[0];
+        const max = sample.slice().sort((a,b)=>Number(b)-Number(a))[0];
+        if(!isNaN(Number(min)) && !isNaN(Number(max))){
+          fltInfo.textContent = `Sugerencia: min ≈ ${min}, max ≈ ${max}`;
+        }
+      }
+    }catch{}
+  }
+}
+
+fltLayerSel.addEventListener('change', async ()=>{
+  const layerId = fltLayerSel.value;
+  fltAttrSel.innerHTML = '<option value="">Cargando…</option>'; fltInfo.textContent = '';
+  if(!layerId){ fltAttrSel.innerHTML = '<option value="">— Atributo —</option>'; return; }
+  try{
+    const attrs = await describeFeatureType(layerId);
+    if(!attrs.length){ fltAttrSel.innerHTML = '<option value="">(sin atributos)</option>'; return; }
+    const byType = (a,b)=> Number(b.type.includes('string'))-Number(a.type.includes('string'));
+    const ord = attrs.sort(byType);
+    fltAttrSel.innerHTML = ord.map(a=>`<option value="${a.name}" data-xsd="${a.type}">${a.name}</option>`).join('');
+    const ops = opsForType(ord[0].type); fltOpSel.innerHTML = ops.map(o => `<option value="${o}">${o}</option>`).join('');
+    await updateValueUI();
+  }catch(e){
+    fltAttrSel.innerHTML = '<option value="">(error)</option>'; fltInfo.textContent = 'No se pudo leer DescribeFeatureType.';
+  }
+});
+fltAttrSel.addEventListener('change', ()=>{
+  const opt = fltAttrSel.selectedOptions[0]; const xsd = opt?.dataset?.xsd || '';
+  const ops = opsForType(xsd);
+  fltOpSel.innerHTML = ops.map(o => `<option value="${o}">${o}</option>`).join('');
+  updateValueUI();
+});
+
+function toCQL(attr, op, val, xsd){
+  const isNullOp = (op==='IS NULL' || op==='IS NOT NULL');
+  if(isNullOp) return `${attr} ${op}`;
+  if(val==='' || val==null) throw new Error('Ingresa/elige un valor.');
+  if(op==='LIKE') return `${attr} LIKE '%${val.replace(/'/g,"''")}%'`;
+  if(isTextType(xsd)) return `${attr} ${op} '${val.replace(/'/g,"''")}'`;
+  const asNumber = Number(val);
+  if(Number.isFinite(asNumber)) return `${attr} ${op} ${asNumber}`;
+  return `${attr} ${op} '${val.replace(/'/g,"''")}'`;
+}
+
+async function applyGenericFilter(){
+  const layerId = fltLayerSel.value; if(!layerId){ alert('Elige una capa.'); return; }
+  const attrs = await describeFeatureType(layerId); if(!attrs.length){ alert('Sin atributos.'); return; }
+  const attrName = fltAttrSel.value || attrs[0].name;
+  const attrMeta = attrs.find(a => a.name===attrName) || attrs[0];
+  const op = fltOpSel.value;
+
+  const val = (fltValueSel.style.display!=='none' ? fltValueSel.value.trim() : fltValueInp.value.trim());
+  const cql = toCQL(attrName, op, val, attrMeta.type);
+  fltInfo.textContent = `CQL_FILTER: ${cql}`;
+
+  const lyr = mapLayers.get(layerId); if(!lyr){ alert('La capa no está en el mapa.'); return; }
+  const src = lyr.getSource();
+  if(src && src.getParams){
+    const params = src.getParams() || {}; params.CQL_FILTER = cql; src.updateParams(params); src.updateParams({_dc: Date.now()});
+  }else{
+    alert('Esta capa no es WMS (no soportado en este panel).');
+  }
+}
+function clearGenericFilter(){
+  const layerId = fltLayerSel.value; if(!layerId) return;
+  const lyr = mapLayers.get(layerId); if(!lyr) return;
+  const src = lyr.getSource();
+  if(src && src.getParams){
+    const params = src.getParams() || {}; delete params.CQL_FILTER; src.updateParams(params); src.updateParams({_dc: Date.now()});
+  }
+  fltInfo.textContent = 'Filtro eliminado.';
+}
+fltApplyBtn.addEventListener('click', applyGenericFilter);
+fltClearBtn.addEventListener('click', clearGenericFilter);
+initFilterLayers();
+
+/* ==== EXPORTACIÓN (vista previa + descarga) ==== */
+function firstVisibleLayerTitle(){
+  const item = visibleWmsItems()[0];
+  return item?.title || 'Mapa';
+}
+function drawNorthArrow(ctx, x, y, size=36){
+  ctx.save(); ctx.translate(x,y); ctx.fillStyle = '#111827';
+  ctx.beginPath(); ctx.moveTo(0,-size/2); ctx.lineTo(size/4, size/2); ctx.lineTo(0, size/4); ctx.lineTo(-size/4, size/2); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#111827'; ctx.font='bold 14px system-ui,Segoe UI,Arial'; ctx.textAlign='center'; ctx.fillText('N',0,-size/2-6); ctx.restore();
+}
+function drawScaleBar(ctx, mapCanvasY, mapH){
+  const res = map.getView().getResolution(); if(!res) return;
+  const maxPx = 200; const metersPerPx = res; const targetMeters = metersPerPx * maxPx;
+  const nice = [1,2,5]; const pow = Math.pow(10, Math.floor(Math.log10(targetMeters)));
+  let length = nice[0]*pow; for(const k of nice){ if(k*pow<=targetMeters) length=k*pow; }
+  const px = length / metersPerPx;
+  const x=24, y=mapCanvasY + mapH - 36, h=10;
+  ctx.fillStyle='rgba(255,255,255,0.9)'; ctx.strokeStyle='#111827';
+  ctx.fillRect(x-8, y-22, px+16, 28); ctx.strokeRect(x-8, y-22, px+16, 28);
+  ctx.fillStyle='#111827'; ctx.fillRect(x, y, px, h);
+  ctx.fillStyle='#111827'; ctx.font='12px system-ui,Segoe UI,Arial'; ctx.textAlign='center';
+  const label = length>=1000 ? (length/1000)+' km' : length+' m'; ctx.fillText(label, x+px/2, y-6);
+}
+function composeImageCanvas(){
+  const titleInput = document.getElementById('titleOverride').value.trim();
+  const dynamicTitle = titleInput || firstVisibleLayerTitle();
+
+  const size = map.getSize();
+  const headerH = 100, footerH = 24, pageMargin = 18;
+
+  const out = document.createElement('canvas');
+  out.width  = size[0];
+  out.height = headerH + size[1] + footerH;
+  const ctx = out.getContext('2d');
+
+  // Fondo y cabecera
+  ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,out.width,out.height);
+
+  const left  = document.getElementById('logoLeft');
+  const right = document.getElementById('logoRight');
+  try{
+    const h=60, rl=(left.naturalWidth/left.naturalHeight)||1, rr=(right.naturalWidth/right.naturalHeight)||1;
+    ctx.drawImage(left, 16, (headerH-h)/2, h*rl, h);
+    ctx.drawImage(right, out.width-16-(h*rr), (headerH-h)/2, h*rr, h);
+  }catch{}
+
+  // Título Sergio Trendy
+  ctx.fillStyle='#111827';
+  ctx.font = 'bold 24px "Sergio Trendy", system-ui, Segoe UI, Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText(dynamicTitle, out.width/2, headerH/2 + 8);
+
+  // Pintar mapa respetando transform
+  const mapCanvas = document.createElement('canvas');
+  mapCanvas.width=size[0]; mapCanvas.height=size[1];
+  const mctx = mapCanvas.getContext('2d');
+  const layerCanvases = Array.from(document.querySelectorAll('.ol-layer canvas'));
+  layerCanvases.forEach(c=>{
+    if(!c || c.width===0 || c.height===0) return;
+    const op = c.parentNode.style.opacity? Number(c.parentNode.style.opacity):1;
+    mctx.globalAlpha = op;
+    const tr = c.style.transform;
+    if(tr && tr.startsWith('matrix(')){
+      const m = tr.slice(7,-1).split(',').map(x=>parseFloat(x.trim()));
+      mctx.setTransform(m[0],m[1],m[2],m[3],m[4],m[5]);
+    }else{ mctx.setTransform(1,0,0,1,0,0); }
+    try{ mctx.drawImage(c,0,0); }catch{}
+  });
+  const mapY = headerH; ctx.drawImage(mapCanvas,0,mapY);
+
+  // Marcos (borde exterior más grueso)
+  ctx.save(); ctx.strokeStyle='#111827'; ctx.lineWidth=3;
+  ctx.strokeRect(pageMargin,pageMargin,out.width-pageMargin*2,out.height-pageMargin*2); ctx.restore();
+  ctx.save(); ctx.strokeStyle='#111827'; ctx.lineWidth=1.25;
+  ctx.strokeRect(0.5, mapY+0.5, size[0]-1, size[1]-1); ctx.restore();
+
+  // Leyenda (multi-capa)
+  const vis = visibleWmsItems();
+  let legendY = mapY + 16;
+  const legendX = out.width - 16 - 260; // caja lado derecho
+  vis.forEach(c=>{
+    const title = c.title;
+    const img = new Image(); img.crossOrigin='anonymous'; img.src = legendImgUrl(c.id);
+    // Ojo: para sincronía simple, dibuja marcadores; después cuando cargue, no re-dibuja preview. (suficiente)
+    ctx.fillStyle='rgba(255,255,255,0.92)'; ctx.strokeStyle='#e5e7eb'; ctx.lineWidth=1;
+    const boxW=260, boxH=60; // alto aprox; imagen real puede variar
+    ctx.fillRect(legendX, legendY, boxW, boxH);
+    ctx.strokeRect(legendX, legendY, boxW, boxH);
+    ctx.fillStyle='#111827'; ctx.font='bold 12px system-ui,Segoe UI,Arial'; ctx.textAlign='left';
+    ctx.fillText(title, legendX+8, legendY+16);
+    img.onload=()=>{
+      const maxW = boxW-16; const sc = Math.min(1, maxW/img.width);
+      const w = img.width*sc, h = img.height*sc;
+      ctx.drawImage(img, legendX+8, legendY+22, w, h);
+    };
+    legendY += boxH + 8;
+  });
+
+  // Norte y escala
+  drawNorthArrow(ctx,48,mapY+52,36);
+  drawScaleBar(ctx,mapY,size[1]);
+
+  // Pie
+  ctx.fillStyle='#f3f4f6'; ctx.fillRect(0,mapY+size[1],out.width,footerH);
+  ctx.fillStyle='#374151'; ctx.font='12px system-ui, Segoe UI, Arial'; ctx.textAlign='left';
+  ctx.fillText(CREDITS_TEXT, 8, mapY+size[1]+16);
+  ctx.textAlign='right'; ctx.fillText(new Date().toLocaleString(), out.width-8, mapY+size[1]+16);
+
+  return out;
+}
+
+function makePreview(){
+  map.once('rendercomplete', ()=>{
+    // intentar directo; si falla por CORS con ESRI, apagarlo temporalmente
+    let ok = true;
+    try{
+      const canvas = composeImageCanvas();
+      const prev = document.getElementById('previewCanvas');
+      prev.width = canvas.width; prev.height = canvas.height;
+      const pctx = prev.getContext('2d'); pctx.clearRect(0,0,prev.width,prev.height);
+      pctx.drawImage(canvas,0,0);
+      // vincular descarga
+      const a = document.getElementById('dlJPG');
+      a.href = canvas.toDataURL('image/jpeg', 0.95);
+    }catch{ ok = false; }
+
+    if(ok) return;
+    // fallback si basemap ESRI rompe CORS
+    const prevVis = { osm: osm.getVisible(), esri: esri.getVisible(), stamen: stamen.getVisible() };
+    esri.setVisible(false);
+    map.once('rendercomplete', ()=>{
+      try{
+        const canvas = composeImageCanvas();
+        const prev = document.getElementById('previewCanvas');
+        prev.width = canvas.width; prev.height = canvas.height;
+        const pctx = prev.getContext('2d'); pctx.clearRect(0,0,prev.width,prev.height);
+        pctx.drawImage(canvas,0,0);
+        const a = document.getElementById('dlJPG'); a.href = canvas.toDataURL('image/jpeg', 0.95);
+      }catch{
+        alert('No se pudo generar la imagen (CORS). Usa OSM/Stamen o sirve imágenes desde tu servidor.');
+      }finally{
+        osm.setVisible(prevVis.osm); esri.setVisible(prevVis.esri); stamen.setVisible(prevVis.stamen);
+      }
+    });
+    map.renderSync();
+  });
+  map.renderSync();
+}
+document.getElementById('makePreview').onclick = makePreview;
+
+/* ==== INIT ==== */
+function buildUI(){ buildGroupsUI(); zoomToLayer('ODS:DEPARTAMENTOS_HN_GEO'); }
+buildUI();
+</script>
+</body>
+</html>
+
+
